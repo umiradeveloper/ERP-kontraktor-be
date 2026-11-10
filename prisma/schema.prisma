@@ -1,0 +1,1108 @@
+// Contractor ERP — schema MVP (berdasarkan PRD v1.0 §12–13)
+// Semua model bisnis tenant-scoped. Nilai uang memakai Decimal (bukan float).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum TenderStatus {
+  DRAFT
+  REVIEW
+  SUBMITTED
+  WON
+  LOST
+  CANCELLED
+}
+
+enum ProjectStatus {
+  SETUP
+  ACTIVE
+  ON_HOLD
+  COMPLETION
+  CLOSED
+  CANCELLED
+}
+
+enum ApprovalStatus {
+  DRAFT
+  SUBMITTED
+  IN_APPROVAL
+  APPROVED
+  REJECTED
+  REVISION
+  CONVERTED
+  CANCELLED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  IN_APPROVAL
+  APPROVED
+  ISSUED
+  PARTIAL_RECEIPT
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum SupplierInvoiceStatus {
+  DRAFT
+  MATCHED
+  MISMATCH
+  POSTED
+  PARTIAL_PAID
+  PAID
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  ISSUED
+  PARTIAL_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum JournalStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  POSTED
+  REVERSED
+}
+
+enum CostCategory {
+  MATERIAL
+  LABOR
+  EQUIPMENT
+  SUBCONTRACTOR
+  OVERHEAD
+  TAX
+  OTHER
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  IN_MAINTENANCE
+  RETIRED
+  DISPOSED
+}
+
+enum PeriodStatus {
+  OPEN
+  CLOSED
+}
+
+// ───────────────────────── SaaS / Tenant ─────────────────────────
+
+model Tenant {
+  id        String   @id @default(uuid()) @db.Char(36)
+  name      String
+  slug      String   @unique
+  status    String   @default("ACTIVE")
+  planCode  String?
+  settings  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companies Company[]
+  users     User[]
+  projects  Project[]
+}
+
+model Company {
+  id       String @id @default(uuid()) @db.Char(36)
+  tenantId String @db.Char(36)
+  name     String
+  code     String
+  npwp     String?
+  address  String?  @db.Text
+  currency String @default("IDR")
+  timezone String @default("Asia/Jakarta")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  projects Project[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Char(36)
+  tenantId     String    @db.Char(36)
+  email        String
+  name         String
+  title        String?
+  passwordHash String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Role {
+  id          String  @id @default(uuid()) @db.Char(36)
+  tenantId    String  @db.Char(36)
+  name        String
+  description String?
+  /// Array string permission, mis. ["project:read","procurement:write"]; "*" = semua
+  permissions Json
+
+  memberships Membership[]
+
+  @@unique([tenantId, name])
+}
+
+model Membership {
+  id        String  @id @default(uuid()) @db.Char(36)
+  tenantId  String  @db.Char(36)
+  userId    String  @db.Char(36)
+  roleId    String  @db.Char(36)
+  companyId String? @db.Char(36)
+  projectId String? @db.Char(36)
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@index([tenantId, userId])
+  @@index([tenantId, projectId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Char(36)
+  tenantId  String    @db.Char(36)
+  userId    String    @db.Char(36)
+  tokenHash String    @unique @db.VarChar(128)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, userId])
+}
+
+model SequenceCounter {
+  id       String @id @default(uuid()) @db.Char(36)
+  tenantId String @db.Char(36)
+  prefix   String
+  year     Int
+  current  Int    @default(0)
+
+  @@unique([tenantId, prefix, year])
+}
+
+// ───────────────────────── Master Data ─────────────────────────
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Char(36)
+  tenantId  String   @db.Char(36)
+  code      String
+  name      String
+  npwp      String?
+  email     String?
+  phone     String?
+  address   String?  @db.Text
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+
+  tenders  Tender[]
+  projects Project[]
+
+  @@unique([tenantId, code])
+}
+
+model Supplier {
+  id          String    @id @default(uuid()) @db.Char(36)
+  tenantId    String    @db.Char(36)
+  code        String
+  name        String
+  category    String?
+  taxNumber   String?
+  email       String?
+  phone       String?
+  paymentTerm Int       @default(30)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  purchaseOrders   PurchaseOrder[]
+  supplierInvoices SupplierInvoice[]
+  rfqSuppliers     RfqSupplier[]
+  quotations       SupplierQuotation[]
+
+  @@unique([tenantId, code])
+}
+
+// ───────────────────────── Tender & BQ ─────────────────────────
+
+model Tender {
+  id           String       @id @default(uuid()) @db.Char(36)
+  tenantId     String       @db.Char(36)
+  number       String
+  title        String
+  customerId   String?      @db.Char(36)
+  location     String?
+  deadline     DateTime?
+  status       TenderStatus @default(DRAFT)
+  version      Int          @default(1)
+  overheadPct  Decimal      @default(5) @db.Decimal(7, 4)
+  contingencyPct Decimal    @default(3) @db.Decimal(7, 4)
+  profitPct    Decimal      @default(10) @db.Decimal(7, 4)
+  taxPct       Decimal      @default(11) @db.Decimal(7, 4)
+  notes        String?      @db.Text
+  projectId    String?      @db.Char(36)
+  createdBy    String       @db.Char(36)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  customer Customer?    @relation(fields: [customerId], references: [id])
+  items    TenderItem[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+model TenderItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  tenderId    String       @db.Char(36)
+  sortOrder   Int          @default(0)
+  section     String
+  code        String
+  description String
+  unit        String?
+  category    CostCategory @default(MATERIAL)
+  costCode    String?
+  quantity    Decimal      @default(0) @db.Decimal(18, 4)
+  unitCost    Decimal      @default(0) @db.Decimal(18, 2)
+  amount      Decimal      @default(0) @db.Decimal(18, 2)
+
+  tender Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tenderId])
+}
+
+// ───────────────────────── Project ─────────────────────────
+
+model Project {
+  id            String        @id @default(uuid()) @db.Char(36)
+  tenantId      String        @db.Char(36)
+  companyId     String        @db.Char(36)
+  customerId    String?       @db.Char(36)
+  tenderId      String?       @db.Char(36)
+  code          String
+  name          String
+  ownerName     String?
+  location      String?
+  managerName   String?
+  contractValue Decimal       @default(0) @db.Decimal(18, 2)
+  retentionPct  Decimal       @default(5) @db.Decimal(7, 4)
+  advancePct    Decimal       @default(0) @db.Decimal(7, 4)
+  currency      String        @default("IDR")
+  startDate     DateTime?
+  endDate       DateTime?
+  progressPct   Decimal       @default(0) @db.Decimal(7, 4)
+  plannedPct    Decimal       @default(0) @db.Decimal(7, 4)
+  status        ProjectStatus @default(SETUP)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  company          Company           @relation(fields: [companyId], references: [id])
+  customer         Customer?         @relation(fields: [customerId], references: [id])
+  bqItems          BqItem[]
+  budgets          Budget[]
+  purchaseRequests PurchaseRequest[]
+  purchaseOrders   PurchaseOrder[]
+  costs            ProjectCost[]
+  invoices         CustomerInvoice[]
+  progressEntries  ProgressEntry[]
+  dailyReports     DailyReport[]
+  supplierInvoices SupplierInvoice[]
+  variationOrders  VariationOrder[]
+
+  @@unique([tenantId, companyId, code])
+  @@index([tenantId, status])
+}
+
+model BqItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  projectId   String       @db.Char(36)
+  sortOrder   Int          @default(0)
+  section     String
+  code        String
+  description String
+  unit        String?
+  category    CostCategory @default(MATERIAL)
+  costCode    String?
+  quantity    Decimal      @default(0) @db.Decimal(18, 4)
+  unitPrice   Decimal      @default(0) @db.Decimal(18, 2)
+  amount      Decimal      @default(0) @db.Decimal(18, 2)
+  revision    Int          @default(1)
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([tenantId, projectId, code])
+}
+
+model ProgressEntry {
+  id          String   @id @default(uuid()) @db.Char(36)
+  tenantId    String   @db.Char(36)
+  projectId   String   @db.Char(36)
+  reportDate  DateTime
+  plannedPct  Decimal  @db.Decimal(7, 4)
+  actualPct   Decimal  @db.Decimal(7, 4)
+  notes       String?  @db.Text
+  createdBy   String   @db.Char(36)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([tenantId, projectId, reportDate])
+}
+
+model DailyReport {
+  id         String   @id @default(uuid()) @db.Char(36)
+  tenantId   String   @db.Char(36)
+  projectId  String   @db.Char(36)
+  reportDate DateTime
+  weather    String?
+  manpower   Int      @default(0)
+  activities String   @db.Text
+  issues     String?  @db.Text
+  createdBy  String   @db.Char(36)
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@index([tenantId, projectId, reportDate])
+}
+
+// ───────────────────────── Budget & Cost ─────────────────────────
+
+model Budget {
+  id         String    @id @default(uuid()) @db.Char(36)
+  tenantId   String    @db.Char(36)
+  projectId  String    @db.Char(36)
+  name       String
+  revision   Int       @default(1)
+  isBaseline Boolean   @default(false)
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  project Project      @relation(fields: [projectId], references: [id])
+  items   BudgetItem[]
+
+  @@index([tenantId, projectId])
+}
+
+model BudgetItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  budgetId    String       @db.Char(36)
+  wbsCode     String?
+  costCode    String?
+  category    CostCategory
+  description String
+  quantity    Decimal      @default(0) @db.Decimal(18, 4)
+  unit        String?
+  unitRate    Decimal      @default(0) @db.Decimal(18, 2)
+  amount      Decimal      @default(0) @db.Decimal(18, 2)
+
+  budget Budget @relation(fields: [budgetId], references: [id])
+
+  @@index([tenantId, budgetId, costCode])
+}
+
+/// Actual cost (biaya yang sudah diakui). Commitment dihitung dari PO yang belum ditagih.
+model ProjectCost {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  projectId   String       @db.Char(36)
+  sourceType  String
+  sourceId    String?      @db.Char(36)
+  costDate    DateTime
+  category    CostCategory
+  description String
+  amount      Decimal      @db.Decimal(18, 2)
+  currency    String       @default("IDR")
+  isPosted    Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, projectId, costDate, category])
+}
+
+// ───────────────────────── Procurement ─────────────────────────
+
+model PurchaseRequest {
+  id          String         @id @default(uuid()) @db.Char(36)
+  tenantId    String         @db.Char(36)
+  projectId   String         @db.Char(36)
+  number      String
+  status      ApprovalStatus @default(DRAFT)
+  requestedBy String         @db.Char(36)
+  neededAt    DateTime?
+  notes       String?        @db.Text
+  totalEstimate Decimal      @default(0) @db.Decimal(18, 2)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  project        Project               @relation(fields: [projectId], references: [id])
+  items          PurchaseRequestItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, projectId, status])
+}
+
+model PurchaseRequestItem {
+  id             String       @id @default(uuid()) @db.Char(36)
+  tenantId       String       @db.Char(36)
+  requestId      String       @db.Char(36)
+  description    String
+  quantity       Decimal      @db.Decimal(18, 4)
+  unit           String?
+  estimatedPrice Decimal      @default(0) @db.Decimal(18, 2)
+  category       CostCategory @default(MATERIAL)
+  costCode       String?
+
+  request PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+model PurchaseOrder {
+  id           String              @id @default(uuid()) @db.Char(36)
+  tenantId     String              @db.Char(36)
+  projectId    String              @db.Char(36)
+  supplierId   String              @db.Char(36)
+  requestId    String?             @db.Char(36)
+  number       String
+  status       PurchaseOrderStatus @default(DRAFT)
+  currency     String              @default("IDR")
+  taxPct       Decimal             @default(11) @db.Decimal(7, 4)
+  subtotal     Decimal             @default(0) @db.Decimal(18, 2)
+  taxAmount    Decimal             @default(0) @db.Decimal(18, 2)
+  total        Decimal             @default(0) @db.Decimal(18, 2)
+  orderDate    DateTime            @default(now())
+  deliveryDate DateTime?
+  deliveryAddress String?
+  terms        String?             @db.Text
+  createdBy    String              @db.Char(36)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  project       Project             @relation(fields: [projectId], references: [id])
+  supplier      Supplier            @relation(fields: [supplierId], references: [id])
+  request       PurchaseRequest?    @relation(fields: [requestId], references: [id])
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+  invoices      SupplierInvoice[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, projectId, status])
+}
+
+model PurchaseOrderItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  poId        String       @db.Char(36)
+  description String
+  quantity    Decimal      @db.Decimal(18, 4)
+  receivedQty Decimal      @default(0) @db.Decimal(18, 4)
+  invoicedQty Decimal      @default(0) @db.Decimal(18, 4)
+  unit        String?
+  unitPrice   Decimal      @db.Decimal(18, 2)
+  amount      Decimal      @db.Decimal(18, 2)
+  category    CostCategory @default(MATERIAL)
+  costCode    String?
+
+  po    PurchaseOrder      @relation(fields: [poId], references: [id], onDelete: Cascade)
+  lines GoodsReceiptLine[]
+}
+
+model GoodsReceipt {
+  id          String   @id @default(uuid()) @db.Char(36)
+  tenantId    String   @db.Char(36)
+  poId        String   @db.Char(36)
+  number      String
+  receiptDate DateTime
+  receivedBy  String   @db.Char(36)
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  warehouseId String?  @db.Char(36)
+
+  po    PurchaseOrder      @relation(fields: [poId], references: [id])
+  lines GoodsReceiptLine[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, poId])
+}
+
+model GoodsReceiptLine {
+  id          String  @id @default(uuid()) @db.Char(36)
+  tenantId    String  @db.Char(36)
+  receiptId   String  @db.Char(36)
+  poItemId    String  @db.Char(36)
+  quantity    Decimal @db.Decimal(18, 4)
+  rejectedQty Decimal @default(0) @db.Decimal(18, 4)
+  notes       String?
+
+  receipt GoodsReceipt      @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  poItem  PurchaseOrderItem @relation(fields: [poItemId], references: [id])
+}
+
+model SupplierInvoice {
+  id            String                @id @default(uuid()) @db.Char(36)
+  tenantId      String                @db.Char(36)
+  supplierId    String                @db.Char(36)
+  projectId     String                @db.Char(36)
+  poId          String?               @db.Char(36)
+  number        String
+  supplierRef   String
+  invoiceDate   DateTime
+  dueDate       DateTime
+  subtotal      Decimal               @db.Decimal(18, 2)
+  taxAmount     Decimal               @default(0) @db.Decimal(18, 2)
+  total         Decimal               @db.Decimal(18, 2)
+  paidAmount    Decimal               @default(0) @db.Decimal(18, 2)
+  status        SupplierInvoiceStatus @default(DRAFT)
+  matchNotes    String?               @db.Text
+  journalId     String?               @db.Char(36)
+  createdAt     DateTime              @default(now())
+
+  supplier Supplier       @relation(fields: [supplierId], references: [id])
+  project  Project        @relation(fields: [projectId], references: [id])
+  po       PurchaseOrder? @relation(fields: [poId], references: [id])
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, supplierId, supplierRef])
+  @@index([tenantId, status, dueDate])
+}
+
+// ───────────────────────── Billing / AR ─────────────────────────
+
+model CustomerInvoice {
+  id           String        @id @default(uuid()) @db.Char(36)
+  tenantId     String        @db.Char(36)
+  projectId    String        @db.Char(36)
+  number       String
+  description  String?
+  progressPct  Decimal       @default(0) @db.Decimal(7, 4)
+  status       InvoiceStatus @default(DRAFT)
+  invoiceDate  DateTime
+  dueDate      DateTime?
+  grossAmount  Decimal       @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal    @default(0) @db.Decimal(18, 2)
+  subtotal     Decimal       @db.Decimal(18, 2)
+  taxAmount    Decimal       @default(0) @db.Decimal(18, 2)
+  total        Decimal       @db.Decimal(18, 2)
+  paidAmount   Decimal       @default(0) @db.Decimal(18, 2)
+  journalId    String?       @db.Char(36)
+  createdAt    DateTime      @default(now())
+
+  project  Project           @relation(fields: [projectId], references: [id])
+  receipts CustomerReceipt[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, projectId, status, dueDate])
+}
+
+model CustomerReceipt {
+  id          String   @id @default(uuid()) @db.Char(36)
+  tenantId    String   @db.Char(36)
+  invoiceId   String   @db.Char(36)
+  number      String
+  receiptDate DateTime
+  amount      Decimal  @db.Decimal(18, 2)
+  method      String   @default("TRANSFER")
+  journalId   String?  @db.Char(36)
+  createdAt   DateTime @default(now())
+
+  invoice CustomerInvoice @relation(fields: [invoiceId], references: [id])
+
+  @@unique([tenantId, number])
+}
+
+model SupplierPayment {
+  id          String   @id @default(uuid()) @db.Char(36)
+  tenantId    String   @db.Char(36)
+  invoiceId   String   @db.Char(36)
+  number      String
+  paymentDate DateTime
+  amount      Decimal  @db.Decimal(18, 2)
+  method      String   @default("TRANSFER")
+  journalId   String?  @db.Char(36)
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, invoiceId])
+}
+
+// ───────────────────────── Accounting ─────────────────────────
+
+model Account {
+  id          String      @id @default(uuid()) @db.Char(36)
+  tenantId    String      @db.Char(36)
+  code        String
+  name        String
+  accountType AccountType
+  isActive    Boolean     @default(true)
+
+  lines JournalLine[]
+
+  @@unique([tenantId, code])
+}
+
+model AccountingPeriod {
+  id       String       @id @default(uuid()) @db.Char(36)
+  tenantId String       @db.Char(36)
+  period   String       // YYYY-MM
+  status   PeriodStatus @default(OPEN)
+  closedAt DateTime?
+
+  @@unique([tenantId, period])
+}
+
+model JournalEntry {
+  id             String        @id @default(uuid()) @db.Char(36)
+  tenantId       String        @db.Char(36)
+  number         String
+  entryDate      DateTime
+  period         String
+  status         JournalStatus @default(DRAFT)
+  description    String?
+  sourceType     String?
+  sourceId       String?       @db.Char(36)
+  /// Kunci idempotensi posting otomatis (mis. "SINV:<id>")
+  postingRef     String?
+  reversalOfId   String?       @db.Char(36)
+  totalDebit     Decimal       @default(0) @db.Decimal(18, 2)
+  createdBy      String?       @db.Char(36)
+  postedAt       DateTime?
+  createdAt      DateTime      @default(now())
+
+  lines JournalLine[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, postingRef])
+  @@index([tenantId, period, status])
+}
+
+model JournalLine {
+  id          String  @id @default(uuid()) @db.Char(36)
+  tenantId    String  @db.Char(36)
+  journalId   String  @db.Char(36)
+  accountId   String  @db.Char(36)
+  projectId   String? @db.Char(36)
+  debit       Decimal @default(0) @db.Decimal(18, 2)
+  credit      Decimal @default(0) @db.Decimal(18, 2)
+  description String?
+
+  journal JournalEntry @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId, accountId, projectId])
+}
+
+// ───────────────────────── Assets ─────────────────────────
+
+model Asset {
+  id              String      @id @default(uuid()) @db.Char(36)
+  tenantId        String      @db.Char(36)
+  assetTag        String
+  name            String
+  category        String
+  serialNumber    String?
+  ownership       String      @default("OWNED")
+  acquisitionCost Decimal     @default(0) @db.Decimal(18, 2)
+  acquisitionDate DateTime?
+  usefulLifeMonths Int        @default(60)
+  condition       String      @default("BAIK")
+  status          AssetStatus @default(AVAILABLE)
+  projectId       String?     @db.Char(36)
+  location        String?
+  custodian       String?
+  createdAt       DateTime    @default(now())
+
+  movements    AssetMovement[]
+  maintenances AssetMaintenance[]
+
+  @@unique([tenantId, assetTag])
+  @@index([tenantId, status])
+}
+
+model AssetMovement {
+  id            String   @id @default(uuid()) @db.Char(36)
+  tenantId      String   @db.Char(36)
+  assetId       String   @db.Char(36)
+  type          String   // ASSIGN | RETURN | TRANSFER
+  fromProjectId String?  @db.Char(36)
+  toProjectId   String?  @db.Char(36)
+  movedAt       DateTime @default(now())
+  notes         String?
+  createdBy     String   @db.Char(36)
+
+  asset Asset @relation(fields: [assetId], references: [id])
+
+  @@index([tenantId, assetId])
+}
+
+model AssetMaintenance {
+  id          String    @id @default(uuid()) @db.Char(36)
+  tenantId    String    @db.Char(36)
+  assetId     String    @db.Char(36)
+  type        String    @default("PREVENTIVE")
+  description String
+  scheduledAt DateTime
+  completedAt DateTime?
+  cost        Decimal   @default(0) @db.Decimal(18, 2)
+  createdAt   DateTime  @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id])
+
+  @@index([tenantId, assetId])
+}
+
+// ───────────────────────── Approval Workflow ─────────────────────────
+
+model WorkflowDefinition {
+  id         String   @id @default(uuid()) @db.Char(36)
+  tenantId   String   @db.Char(36)
+  entityType String   // PR | PO
+  name       String
+  version    Int      @default(1)
+  isActive   Boolean  @default(true)
+  /// [{ step: 1, roleName: "Project Manager", minAmount: "0" }, ...]
+  steps      Json
+  createdAt  DateTime @default(now())
+
+  @@unique([tenantId, entityType, version])
+}
+
+model ApprovalRequest {
+  id              String         @id @default(uuid()) @db.Char(36)
+  tenantId        String         @db.Char(36)
+  entityType      String
+  entityId        String         @db.Char(36)
+  entityNumber    String
+  title           String
+  amount          Decimal        @default(0) @db.Decimal(18, 2)
+  requestedBy     String         @db.Char(36)
+  status          ApprovalStatus @default(IN_APPROVAL)
+  workflowVersion Int
+  /// Snapshot langkah workflow saat diajukan (PRD §5.13)
+  stepsSnapshot   Json
+  currentStep     Int            @default(1)
+  createdAt       DateTime       @default(now())
+  completedAt     DateTime?
+
+  decisions ApprovalDecision[]
+
+  @@index([tenantId, entityType, entityId, status])
+  @@index([tenantId, status])
+}
+
+model ApprovalDecision {
+  id         String   @id @default(uuid()) @db.Char(36)
+  tenantId   String   @db.Char(36)
+  approvalId String   @db.Char(36)
+  step       Int
+  approverId String   @db.Char(36)
+  decision   String
+  comment    String?  @db.Text
+  decidedAt  DateTime @default(now())
+
+  approval ApprovalRequest @relation(fields: [approvalId], references: [id])
+
+  @@index([tenantId, approvalId])
+}
+
+// ───────────────────────── Audit ─────────────────────────
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Char(36)
+  tenantId   String   @db.Char(36)
+  actorId    String?  @db.Char(36)
+  actorName  String?
+  action     String
+  entityType String
+  entityId   String
+  requestId  String?
+  createdAt  DateTime @default(now())
+  metadata   Json?
+
+  @@index([tenantId, entityType, entityId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+// ───────────────────────── RFQ & quotation (PRD §5.5) ─────────────────────────
+
+model Rfq {
+  id                String    @id @default(uuid()) @db.Char(36)
+  tenantId          String    @db.Char(36)
+  number            String
+  projectId         String    @db.Char(36)
+  requestId         String?   @db.Char(36)
+  title             String
+  dueDate           DateTime?
+  /// DRAFT | OPEN | AWARDED | CANCELLED
+  status            String    @default("OPEN")
+  awardedSupplierId String?   @db.Char(36)
+  awardReason       String?   @db.Text
+  poId              String?   @db.Char(36)
+  createdBy         String    @db.Char(36)
+  createdAt         DateTime  @default(now())
+
+  items      RfqItem[]
+  suppliers  RfqSupplier[]
+  quotations SupplierQuotation[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+model RfqItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  rfqId       String       @db.Char(36)
+  description String
+  quantity    Decimal      @db.Decimal(18, 4)
+  unit        String?
+  category    CostCategory @default(MATERIAL)
+  costCode    String?
+
+  rfq   Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  lines QuotationLine[]
+}
+
+model RfqSupplier {
+  id         String @id @default(uuid()) @db.Char(36)
+  tenantId   String @db.Char(36)
+  rfqId      String @db.Char(36)
+  supplierId String @db.Char(36)
+
+  rfq      Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([rfqId, supplierId])
+}
+
+model SupplierQuotation {
+  id           String    @id @default(uuid()) @db.Char(36)
+  tenantId     String    @db.Char(36)
+  rfqId        String    @db.Char(36)
+  supplierId   String    @db.Char(36)
+  quoteRef     String?
+  quoteDate    DateTime
+  leadTimeDays Int       @default(7)
+  paymentTerm  Int       @default(30)
+  validUntil   DateTime?
+  notes        String?   @db.Text
+  subtotal     Decimal   @db.Decimal(18, 2)
+  createdAt    DateTime  @default(now())
+
+  rfq      Rfq             @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier Supplier        @relation(fields: [supplierId], references: [id])
+  lines    QuotationLine[]
+
+  @@unique([rfqId, supplierId])
+}
+
+model QuotationLine {
+  id          String  @id @default(uuid()) @db.Char(36)
+  tenantId    String  @db.Char(36)
+  quotationId String  @db.Char(36)
+  rfqItemId   String  @db.Char(36)
+  unitPrice   Decimal @db.Decimal(18, 2)
+  amount      Decimal @db.Decimal(18, 2)
+
+  quotation SupplierQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  rfqItem   RfqItem           @relation(fields: [rfqItemId], references: [id])
+}
+
+// ───────────────────────── Gudang & stok (PRD §5.12) ─────────────────────────
+
+model Warehouse {
+  id        String  @id @default(uuid()) @db.Char(36)
+  tenantId  String  @db.Char(36)
+  code      String
+  name      String
+  projectId String? @db.Char(36)
+  location  String?
+  isActive  Boolean @default(true)
+
+  balances  StockBalance[]
+  movements StockMovement[]
+
+  @@unique([tenantId, code])
+}
+
+model InventoryItem {
+  id       String       @id @default(uuid()) @db.Char(36)
+  tenantId String       @db.Char(36)
+  code     String
+  name     String
+  unit     String?
+  category CostCategory @default(MATERIAL)
+  minStock Decimal      @default(0) @db.Decimal(18, 4)
+
+  balances  StockBalance[]
+  movements StockMovement[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, name])
+}
+
+/// Saldo per gudang per item, nilai memakai moving average
+model StockBalance {
+  id          String  @id @default(uuid()) @db.Char(36)
+  tenantId    String  @db.Char(36)
+  warehouseId String  @db.Char(36)
+  itemId      String  @db.Char(36)
+  quantity    Decimal @default(0) @db.Decimal(18, 4)
+  avgCost     Decimal @default(0) @db.Decimal(18, 2)
+
+  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@unique([warehouseId, itemId])
+  @@index([tenantId])
+}
+
+model StockMovement {
+  id          String   @id @default(uuid()) @db.Char(36)
+  tenantId    String   @db.Char(36)
+  number      String
+  warehouseId String   @db.Char(36)
+  itemId      String   @db.Char(36)
+  /// RECEIPT | ISSUE | TRANSFER_IN | TRANSFER_OUT | ADJUSTMENT
+  type        String
+  /// Bertanda: positif = masuk, negatif = keluar
+  quantity    Decimal  @db.Decimal(18, 4)
+  unitCost    Decimal  @default(0) @db.Decimal(18, 2)
+  refType     String?
+  refId       String?  @db.Char(36)
+  projectId   String?  @db.Char(36)
+  costCode    String?
+  notes       String?
+  movedAt     DateTime @default(now())
+  createdBy   String   @db.Char(36)
+
+  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@index([tenantId, warehouseId, itemId, movedAt])
+  @@index([tenantId, number])
+}
+
+// ───────────────────────── Variation order (PRD §5.4) ─────────────────────────
+
+model VariationOrder {
+  id             String         @id @default(uuid()) @db.Char(36)
+  tenantId       String         @db.Char(36)
+  projectId      String         @db.Char(36)
+  number         String
+  title          String
+  description    String?        @db.Text
+  /// Perubahan nilai kontrak (bisa negatif untuk pekerjaan kurang)
+  contractChange Decimal        @db.Decimal(18, 2)
+  status         ApprovalStatus @default(DRAFT)
+  requestedBy    String         @db.Char(36)
+  approvedAt     DateTime?
+  budgetId       String?        @db.Char(36)
+  createdAt      DateTime       @default(now())
+
+  project Project              @relation(fields: [projectId], references: [id])
+  items   VariationOrderItem[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, projectId])
+}
+
+model VariationOrderItem {
+  id          String       @id @default(uuid()) @db.Char(36)
+  tenantId    String       @db.Char(36)
+  voId        String       @db.Char(36)
+  category    CostCategory
+  description String
+  /// Perubahan budget biaya (bisa negatif)
+  amount      Decimal      @db.Decimal(18, 2)
+
+  vo VariationOrder @relation(fields: [voId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────── Dokumen & notifikasi (PRD §5.14) ─────────────────────────
+
+model FileObject {
+  id         String   @id @default(uuid()) @db.Char(36)
+  tenantId   String   @db.Char(36)
+  entityType String
+  entityId   String   @db.Char(36)
+  fileName   String
+  mimeType   String
+  size       Int
+  storageKey String
+  category   String?
+  uploadedBy String   @db.Char(36)
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, entityType, entityId])
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Char(36)
+  tenantId  String    @db.Char(36)
+  userId    String    @db.Char(36)
+  type      String
+  title     String
+  body      String?   @db.Text
+  link      String?
+  dedupeKey String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([tenantId, userId, dedupeKey])
+  @@index([tenantId, userId, readAt])
+}
+
+/// Token push perangkat mobile (Expo push token) per user
+model DevicePushToken {
+  id        String   @id @default(uuid()) @db.Char(36)
+  tenantId  String   @db.Char(36)
+  userId    String   @db.Char(36)
+  token     String   @unique @db.VarChar(255)
+  platform  String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, userId])
+}
